@@ -1,0 +1,166 @@
+---
+title: "Tf2 Time Series"
+output: html_document
+date: "2025-02-13"
+---
+
+```{r include=FALSE}
+library(tidyverse)
+library(rstudioapi)
+library(tsibble)
+library(fabletools)
+library(scales)
+library(fable)
+library(forecast)
+library(extrafont)
+library(lubridate)
+library(imputeTS)
+library(feasts)
+library(conflicted)
+library(here)
+setwd(here())
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+```
+
+```{r}
+data =read.csv("tf2Key.csv")
+
+player = read.csv("avgTf2Count.csv")
+
+player = player$player
+
+player = rev(player)
+
+player = player[1:(length(player) - 1)]
+
+months = seq(as.Date("2012-07-01"),as.Date("2025-01-01"),by = "1 month")
+playercount = data.frame(month = months, player = player)
+
+playercount = playercount %>% as_tsibble 
+
+
+
+playercount %>% autoplot()
+
+data = data %>% select(dates,avgVal,peakPlayer) %>% mutate(dates = yearmonth(dates))
+
+data = data %>% as_tsibble(index = dates,regular = T)
+
+data = data %>% na_interpolation(option = "linear")
+
+av = mean(data$peakPlayer)
+stddev = sd(data$peakPlayer)
+data = data %>% mutate(month = month(dates)) %>% mutate(minorUpdate = if_else(month %in% c(6,12),1,0))
+
+majorUpdates = c("2012 Aug","2013 May","2013 Nov", "2014 Jun","2014 Dec", "2015 Jul", "2015 Oct","2016 Jul", "2017 Oct")
+data = data %>% mutate(majorUpdate = if_else(dates %in% majorUpdates,1,0))
+data = data %>% mutate(majorUpdate = majorUpdate + dplyr::lag(majorUpdate,default = 0))
+
+data = data %>% mutate(peakPlayerNorm = ( (peakPlayer - av) / sd(peakPlayer)))
+data = data %>% mutate(n = 1:n(), n2 = n^2)
+```
+
+```{r}
+gg_tsdisplay(data)
+```
+
+```{r}
+diff = data %>% mutate(avgVal = difference(avgVal))
+
+diff = diff[-1,]
+```
+
+```{r}
+ggtsdisplay(diff$avgVal)
+```
+
+```{r}
+index = seq(1,nrow(data))[1:ceiling( .8 * nrow(data))]
+
+train = data[index,]
+
+test = data[-index,]
+```
+
+```{r}
+
+firstTest = train %>% model(
+  ARIMA1 = ARIMA(formula = avgVal ~ 0 + pdq(0,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA2 = ARIMA(formula = avgVal ~ 0 + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA3 = ARIMA(formula = avgVal ~ 0 + pdq(d = 1) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA4 = ARIMA(formula = avgVal ~ 0 + pdq(2,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA5 = ARIMA(formula = avgVal ~ 0 + pdq(2,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+
+)
+
+firstTest %>% report() %>% arrange(AIC)
+```
+
+```{r}
+
+fcTestDates = yearmonth(seq(from = as.Date("2022-08-01"), to = as.Date("2025-01-01"), by = "1 month"))
+
+fcTestData = data.frame(dates = fcTestDates)
+
+fcTestData = fcTestData %>% mutate(month = month(dates)) %>% mutate(minorUpdate = if_else(month %in% c(6,12),1,0)) %>% mutate(majorUpdate = 0) %>% mutate(n = seq(121,(121 + nrow(fcTestData) - 1))) %>% mutate(n2 = n^2)
+
+fcTestData = fcTestData %>% as_tsibble()
+
+fcTest = firstTest %>% select(ARIMA5) %>% forecast(new_data = fcTestData)
+
+autoplot(fcTest)
+
+fcTest
+
+ggtsdisplay(c(train$avgVal,fcTest$.mean))
+
+mean( abs(fcTest$.mean - test$avgVal) / test$avgVal)
+
+```
+
+```{r}
+
+first = data %>% model(
+  ARIMA1 = ARIMA(formula = avgVal ~ 0 + pdq(0,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA2 = ARIMA(formula = avgVal ~ 0 + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA3 = ARIMA(formula = avgVal ~ 0 + pdq(d = 1) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA4 = ARIMA(formula = avgVal ~ 0 + pdq(2,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+  ARIMA5 = ARIMA(formula = avgVal ~ 0 + pdq(2,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
+
+)
+
+first %>% report() %>% arrange(AIC)
+
+first %>% select(ARIMA2) %>% report()
+```
+```{r}
+fcDates = yearmonth(seq(from = as.Date("2025-02-01"), to = as.Date("2032-02-01"), by = "1 month"))
+
+fcData = data.frame(dates = fcDates)
+
+
+fcData = fcData %>% mutate(month = month(dates)) %>% mutate(minorUpdate = if_else(month %in% c(6,12),1,0)) %>% mutate(majorUpdate = 0) %>% mutate(n = seq(152,(152 + nrow(fcData) - 1))) %>% mutate(n2 = n^2)
+
+fcData = fcData %>% as_tsibble()
+
+fc = first %>% select(ARIMA2) %>% forecast(new_data = fcData)
+
+fc
+autoplot(fc)
+
+ggtsdisplay(c(dataTest$avgVal,fc$.mean))
+
+nrow(fcDates)
+
+
+seq(152,(152 + nrow(fcData)))
+```
+
+```{r}
+fc
+```
+
+
+
+
