@@ -149,7 +149,7 @@ fc = first %>% select(ARIMA2) %>% forecast(new_data = fcData)
 fc
 autoplot(fc)
 
-ggtsdisplay(c(dataTest$avgVal,fc$.mean))
+ggtsdisplay(c(data$avgVal,fc$.mean))
 
 nrow(fcDates)
 
@@ -158,9 +158,5 @@ seq(152,(152 + nrow(fcData)))
 ```
 
 ```{r}
-fc
+write.csv(fc,"forecast.csv")
 ```
-
-
-
-
