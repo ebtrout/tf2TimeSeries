@@ -24,9 +24,9 @@ conflict_prefer("filter", "dplyr")
 ```
 
 ```{r}
-data =read.csv("tf2Key.csv")
+data =read.csv("data/tf2Key.csv")
 
-player = read.csv("avgTf2Count.csv")
+player = read.csv("data/avgTf2Count.csv")
 
 player = player$player
 
@@ -158,5 +158,5 @@ seq(152,(152 + nrow(fcData)))
 ```
 
 ```{r}
-write.csv(fc,"forecast.csv")
+write.csv(fc,"data/forecast.csv")
 ```
