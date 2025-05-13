@@ -23,26 +23,29 @@ conflict_prefer("select", "dplyr")
 conflict_prefer("filter", "dplyr")
 ```
 
+# Data Reading
 ```{r}
 data =read.csv("data/tf2Key.csv")
 
 player = read.csv("data/avgTf2Count.csv")
+```
 
+# Converting to tsibble
+```{r}
+months = seq(as.Date("2012-07-01"),as.Date("2025-01-01"),by = "1 month")
+
+# Player Data
 player = player$player
 
 player = rev(player)
 
 player = player[1:(length(player) - 1)]
 
-months = seq(as.Date("2012-07-01"),as.Date("2025-01-01"),by = "1 month")
 playercount = data.frame(month = months, player = player)
 
-playercount = playercount %>% as_tsibble 
+playercount = playercount %>% as_tsibble(index = month)
 
-
-
-playercount %>% autoplot()
-
+# Key price data 
 data = data %>% select(dates,avgVal,peakPlayer) %>% mutate(dates = yearmonth(dates))
 
 data = data %>% as_tsibble(index = dates,regular = T)
@@ -50,31 +53,67 @@ data = data %>% as_tsibble(index = dates,regular = T)
 data = data %>% na_interpolation(option = "linear")
 
 av = mean(data$peakPlayer)
+
 stddev = sd(data$peakPlayer)
+
+# Adding updates
+
 data = data %>% mutate(month = month(dates)) %>% mutate(minorUpdate = if_else(month %in% c(6,12),1,0))
 
 majorUpdates = c("2012 Aug","2013 May","2013 Nov", "2014 Jun","2014 Dec", "2015 Jul", "2015 Oct","2016 Jul", "2017 Oct")
 data = data %>% mutate(majorUpdate = if_else(dates %in% majorUpdates,1,0))
+
 data = data %>% mutate(majorUpdate = majorUpdate + dplyr::lag(majorUpdate,default = 0))
 
+data <- data %>%
+  mutate(
+    minorUpdate = case_when(
+      minorUpdate == 1 ~ 1,
+      dplyr::lag(minorUpdate, 1, default = 0) == 1 ~ 0.5,
+      dplyr::lag(minorUpdate, 2, default = 0) == 1 ~ 0.25,
+      TRUE ~ 0
+    )
+  )
+
+data <- data %>%
+  mutate(
+    majorUpdate = case_when(
+      majorUpdate == 1 ~ 1,
+      dplyr::lag(majorUpdate, 1, default = 0) == 1 ~ 0.5,
+      dplyr::lag(majorUpdate, 2, default = 0) == 1 ~ 0.25,
+      TRUE ~ 0
+    )
+  )
+
+
+# Adding linear trend
 data = data %>% mutate(peakPlayerNorm = ( (peakPlayer - av) / sd(peakPlayer)))
+
 data = data %>% mutate(n = 1:n(), n2 = n^2)
 ```
 
+# Data investigation
+
+## Raw TS
 ```{r}
 gg_tsdisplay(data)
 ```
 
+## Differencing
 ```{r}
 diff = data %>% mutate(avgVal = difference(avgVal))
 
 diff = diff[-1,]
 ```
 
+## TS of Difference
 ```{r}
 ggtsdisplay(diff$avgVal)
 ```
 
+# Model Building
+
+## Train test split
 ```{r}
 index = seq(1,nrow(data))[1:ceiling( .8 * nrow(data))]
 
@@ -83,6 +122,7 @@ train = data[index,]
 test = data[-index,]
 ```
 
+## Model assessment
 ```{r}
 
 firstTest = train %>% model(
@@ -96,7 +136,7 @@ firstTest = train %>% model(
 
 firstTest %>% report() %>% arrange(AIC)
 ```
-
+## Test assessment
 ```{r}
 
 fcTestDates = yearmonth(seq(from = as.Date("2022-08-01"), to = as.Date("2025-01-01"), by = "1 month"))
@@ -107,56 +147,67 @@ fcTestData = fcTestData %>% mutate(month = month(dates)) %>% mutate(minorUpdate 
 
 fcTestData = fcTestData %>% as_tsibble()
 
-fcTest = firstTest %>% select(ARIMA5) %>% forecast(new_data = fcTestData)
+fcTest = firstTest %>% select(ARIMA3) %>% forecast(new_data = fcTestData)
 
 autoplot(fcTest)
-
-fcTest
-
-ggtsdisplay(c(train$avgVal,fcTest$.mean))
 
 mean( abs(fcTest$.mean - test$avgVal) / test$avgVal)
 
 ```
+# Forecasting
 
+## Final Model
 ```{r}
-
-first = data %>% model(
-  ARIMA1 = ARIMA(formula = avgVal ~ 0 + pdq(0,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
-  ARIMA2 = ARIMA(formula = avgVal ~ 0 + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
-  ARIMA3 = ARIMA(formula = avgVal ~ 0 + pdq(d = 1) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
-  ARIMA4 = ARIMA(formula = avgVal ~ 0 + pdq(2,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
-  ARIMA5 = ARIMA(formula = avgVal ~ 0 + pdq(2,1,3) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n),
-
+final = data %>% model(
+  ARIMA3 = ARIMA(formula = avgVal ~ 0 + pdq(d = 1) + (minorUpdate) + PDQ(0,0,0) + (majorUpdate) + n)
 )
-
-first %>% report() %>% arrange(AIC)
-
-first %>% select(ARIMA2) %>% report()
 ```
+
+# Results
+
+## Forecasting
 ```{r}
-fcDates = yearmonth(seq(from = as.Date("2025-02-01"), to = as.Date("2032-02-01"), by = "1 month"))
+fcDates = yearmonth(seq(from = as.Date("2025-02-01"), to = as.Date("2030-02-01"), by = "1 month"))
 
 fcData = data.frame(dates = fcDates)
 
 
-fcData = fcData %>% mutate(month = month(dates)) %>% mutate(minorUpdate = if_else(month %in% c(6,12),1,0)) %>% mutate(majorUpdate = 0) %>% mutate(n = seq(152,(152 + nrow(fcData) - 1))) %>% mutate(n2 = n^2)
+fcData = fcData %>% mutate(month = month(dates)) %>% 
+  mutate(minorUpdate = if_else(month %in% c(6,12),1,0)) %>% 
+  mutate(majorUpdate = 0) %>% 
+  mutate(n = seq(152,(152 + nrow(fcData) - 1))) %>% mutate(n2 = n^2)
 
-fcData = fcData %>% as_tsibble()
+fcData <- fcData %>%
+  mutate(
+    minorUpdate = case_when(
+      minorUpdate == 1 ~ 1,
+      dplyr::lag(minorUpdate, 1, default = 0) == 1 ~ 0.5,
+      dplyr::lag(minorUpdate, 2, default = 0) == 1 ~ 0.25,
+      TRUE ~ 0
+    )
+  )
 
-fc = first %>% select(ARIMA2) %>% forecast(new_data = fcData)
+fcData = fcData %>% as_tsibble(index = dates)
 
-fc
+fc = first %>% select(ARIMA3) %>% forecast(new_data = fcData)
+```
+
+
+## Final Plots
+
+```{r}
 autoplot(fc)
 
 ggtsdisplay(c(data$avgVal,fc$.mean))
 
-nrow(fcDates)
-
-
-seq(152,(152 + nrow(fcData)))
 ```
-
+## Outputting data
 ```{r}
-write.csv(fc,"data/forecast.csv")
+fc_wide <- fc %>% 
+  hilo() %>% 
+  unpack_hilo(`80%`, names_sep = "_") %>%
+  as.data.frame() %>% 
+  select(-c("95%","avgVal"))
+
+write.csv(fc_wide,"data/forecast.csv")
 ```
